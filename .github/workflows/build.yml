@@ -1,0 +1,65 @@
+name: Build macOS .dylib
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install common deps
+        run: |
+          set -e
+          # Install common tools if needed (safe no-op if already present)
+          brew --version || (echo "Homebrew not found, skipping" )
+
+      - name: Build (auto-detect)
+        run: |
+          set -e
+          echo "Auto-detecting build system..."
+          if [ -f ./build.sh ]; then
+            echo "Found build.sh — running"
+            chmod +x ./build.sh
+            ./build.sh
+          elif [ -f CMakeLists.txt ]; then
+            echo "Found CMakeLists.txt — building with CMake"
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+            cmake --build build --config Release
+          elif [ -f Package.swift ]; then
+            echo "Found Swift Package Manager manifest — building with swift build"
+            swift build -c release
+          elif [ -f Makefile ]; then
+            echo "Found Makefile — running make"
+            make -j$(sysctl -n hw.ncpu || echo 2)
+          else
+            echo "No known build system found (build.sh, CMakeLists.txt, Package.swift, Makefile)." >&2
+            exit 1
+          fi
+
+      - name: Collect .dylib artifacts
+        run: |
+          set -e
+          mkdir -p artifacts
+          echo "Searching for .dylib files..."
+          found=false
+          while IFS= read -r -d '' f; do
+            echo "Found: $f"
+            cp "$f" artifacts/ || true
+            found=true
+          done < <(find . -type f -name "*.dylib" -print0 || true)
+          if [ "$found" = false ]; then
+            echo "Warning: no .dylib files were found."
+          fi
+          ls -la artifacts || true
+
+      - name: Upload .dylib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dylib
+          path: artifacts/*.dylib
